@@ -1,0 +1,16 @@
+__pycache__/
+*.py[co]
+*.egg-info/
+.vscode/
+.idea/
+*.swp
+
+# colcon artefacts when this package is built in place
+build/
+install/
+log/
+
+# site-specific files and run outputs
+gui/settings.json
+records/
+config.yaml

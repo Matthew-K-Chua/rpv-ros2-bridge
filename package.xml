@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>ceai</name>
+  <version>0.0.1</version>
+  <description>Nav2 to RPV policy bridge, launch files and operator console for object-goal navigation on Spot and the TurtleBot 4</description>
+  <maintainer email="mattkchua@gmail.com">Matthew Chua</maintainer>
+  <license>MIT</license>
+
+  <!-- The bridge (ceai/rpv_bridge.py) -->
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-requests</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <!-- The launch files -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <!-- launch/robot_onboard.launch.py: the D435 and the depth -> cloud -> /scan chain.
+       realsense2_camera must be the PATCHED local build (patches/, see the README). -->
+  <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+  <exec_depend>depth_image_proc</exec_depend>
+  <exec_depend>pointcloud_to_laserscan</exec_depend>
+  <!-- launch/nav_stack.launch.py -->
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

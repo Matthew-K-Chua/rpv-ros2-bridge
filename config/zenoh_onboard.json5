@@ -1,0 +1,46 @@
+// Pi side: CONNECTS OUT to 127.0.0.1:7447, which the SSH tunnel forwards to
+// the workstation. NOT the workstation's 100.x address -- port 7447 is ACL-blocked
+// between these machines (T2), only port 22 is open.
+//
+// THE DENY LIST IS THE WHOLE BANDWIDTH ARGUMENT. This link carries ~50
+// Mbit/s. What crosses, and roughly what it costs:
+//
+//   /scan                                       ~0.35 Mbit/s
+//   colour, as .../image_raw/compressed         JPEG, small
+//   aligned depth, 16UC1 424x240x6              ~9.8 Mbit/s  (ARITHMETIC, not
+//                                                             measured)
+//   /tf, /odometry, /map                        small
+//
+// MEASURED 2026-09-15: the full depth+colour pair costs ~24 Mbit/s, so it fits
+// with headroom. Raw depth at 848x480x15 would be ~98 Mbit/s and does not --
+// hence the deny below. With allow:[".*"] instead, the link saturates and
+// everything downstream, including service replies, degrades.
+{
+  mode: "peer",
+  connect: { endpoints: ["tcp/127.0.0.1:7447"] },
+  scouting: { multicast: { enabled: false } },
+  plugins: {
+    ros2dds: {
+      domain: 0,
+      // Raw depth NEVER crosses: the cloud and the flattener run on the Pi so
+      // that only a 720-float /scan leaves. These patterns are FULL matches,
+      // not substrings, so "/camera/camera/depth/.*" does NOT catch
+      // "/camera/camera/aligned_depth_to_color/image_raw" -- which the policy
+      // needs and which is deliberately allowed. Verified 2026-09-15: the
+      // bridge logs each topic as "- Allowed" with the route it created.
+      //
+      // "/depth/.*" and "/scan_parts/.*" are Spot's body-camera streams and the
+      // partial scans they fed. Those topics do not exist today (the chain is
+      // off in config/spot_driver.yaml); the patterns stay so that turning it
+      // back on for a comparison run cannot saturate the link by accident.
+      deny: {
+        publishers:  ["/camera/camera/depth/.*", "/depth/.*", "/scan_parts/.*",
+                      "/rosout", "/parameter_events"],
+        subscribers: ["/camera/camera/depth/.*", "/depth/.*", "/scan_parts/.*",
+                      "/rosout", "/parameter_events"],
+      },
+      // Safety valve if T9 says the colour stream is still too heavy:
+      // pub_max_frequencies: [".*/image_raw/compressed=6"],
+    },
+  },
+}

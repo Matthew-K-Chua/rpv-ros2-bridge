@@ -1,0 +1,125 @@
+# Bridge parameters for Spot. Loaded by node name -- `nav2_vlfm_bridge` must
+# match ceai/rpv_bridge.py's node name or NOTHING here is applied, silently.
+#
+#   ros2 run ceai rpv_bridge --ros-args --params-file config/spot_bridge.yaml
+#
+# WHAT IS *NOT* HERE IS THE POINT. Frames, topics, footprint and geometry come
+# from `robot: "spot"`, which selects ceai/robots/spot.py. They used to be
+# repeated in this file, in a second bridge implementation and in gui/config.py,
+# with nothing keeping the copies equal. This file now carries only DEPLOYMENT
+# choices: which object, which policy, and the three gates that were tuned
+# against measurements on this rig.
+#
+# To see what `robot: "spot"` actually resolves to:
+#   python3 -c "from ceai.robots import load; print(load('spot'))"
+
+nav2_vlfm_bridge:
+  ros__parameters:
+    # Frames, topics and geometry all follow from this one line.
+    robot: "spot"
+
+    # ---- what to look for, and who to ask ------------------------------------
+    target: "backpack"
+    policy_url: "http://127.0.0.1:13000/rpv_policy"
+
+    # ---- depth ---------------------------------------------------------------
+    # The D435's aligned depth, straight off the camera. Registered to the colour
+    # frame BY THE CAMERA, so the raster is colour-SIZED by construction and a
+    # shape mismatch is a wiring error rather than a resolution choice. The
+    # stamps are sub-frame apart, not identical -- each stream carries its own
+    # hardware timestamp (see ceai/bridge/depth.py before tightening
+    # scan_max_dt).
+    #
+    # Was "zoedepth" (monocular metric depth) until 2026-09-15, because the Pi
+    # was believed unable to run the D435's depth and colour together. It can --
+    # the patched realsense2_camera driver. ZoeDepth remains the fallback for a
+    # robot with no depth sensor.
+    depth_source: "realsense"
+
+    # THE POLICY'S DEPTH BAND, and the most dangerous pair of numbers in the
+    # tree. max_depth is BOTH the [0,1] normalisation divisor AND the value the
+    # server reads as "out of range", so a wrong value silently DISCARDS
+    # detections instead of erroring.
+    #
+    # These are the D435's min_range_m / obstacle_range_m from ceai/cameras.py
+    # and must equal them; keep the two in step when editing either file --
+    # they do. They must also equal RPV_MAX_DEPTH_M / RPV_MIN_DEPTH_M in
+    # the policy server's environment, which scripts/launch_offboard.sh derives from
+    # the same place. NOT max_range_m (10.0, what /scan shows): a detection
+    # past obstacle_range_m is placed from the same noisy depth that 169aa79
+    # stopped marking as an obstacle.
+    min_depth: 0.3
+    max_depth: 3.0    # follows ceai/cameras.py obstacle_range_m (2026-09-19 split; was max_range_m: 8.0 on 09-16, 3.0 on 09-17, 4.0 with 169aa79)
+
+    # ---- init-scan capture gate ----------------------------------------------
+    # How long /odometry must report the base still before its stop is
+    # believed and the "frame captured after the stop" wait begins. Spot turns
+    # in place by STEPPING and its yaw rate dips below motion_ang_eps between
+    # steps; without a hold the first dip was taken as the stop mid-spin and
+    # the init scan POSTed frames captured while still rotating (2026-09-19,
+    # no_nav_again.webm). 0.0 = off, the bare edge (the code default). Cost:
+    # each of the 12 init steps waits this much longer.
+    motion_still_hold: 0.3
+
+    # ---- goal republish gate -------------------------------------------------
+    # Only resend /goal_pose once the goal has moved this far. 0.0 = off.
+    #
+    # MEASURED 2026-09-12, 407 s run: the bridge published 132 goals and every
+    # one was the SAME point. Each publish is a fresh NavigateToPose, so
+    # bt_navigator cancelled the running one and the controller restarted by
+    # rotating onto the new path -- 36 navigations begun, 35 preempted, a path
+    # reached the legs 8 times. The robot turned for seven minutes and never
+    # walked.
+    #
+    # 0.25 m is a quarter of Spot's body width. A mode change (explore ->
+    # navigate) always republishes regardless of this value.
+    goal_epsilon_m: 0.25
+    # Yaw-only republishing stays off: in explore mode the server re-aims the
+    # heading on arrival, and honouring that reintroduces the preemption this
+    # gate exists to stop.
+    goal_epsilon_yaw: 0.0
+
+    # ---- keep the goal on the map --------------------------------------------
+    # A frontier is on the edge of the SLAM map and the policy's goal lands a
+    # cell or two past it; Nav2's global costmap is resized to exactly that map,
+    # so the planner refuses ("The goal sent to the planner is off the global
+    # costmap. Planning will always fail to this goal") and the robot only ever
+    # runs recoveries -- MEASURED 2026-09-19, nav_failed_again_no_bashrc.webm,
+    # every goal of the run. The bridge pulls such a goal inside the map by the
+    # margin below (in explore AND navigate mode, after the standoff). The
+    # planner's tolerance is 0.5 m and it may plan into unknown space, so a
+    # goal 0.3 m inside the edge is reachable. Set false to disable.
+    clamp_goal_to_map: true
+    goal_map_margin_m: 0.3
+
+    # ---- episode length ------------------------------------------------------
+    # End the run after this many policy steps (the init scan's 12 count) if
+    # the policy has not called stop by then: the finish sequence below runs
+    # exactly as it does on a found target. Code default 0 = no limit; set 0
+    # here or pass `-p max_steps:=0` to run until called_stop.
+    max_steps: 500
+
+    # ---- after the target is reached -----------------------------------------
+    # The policy's called_stop fires 1.4 m from the object while Nav2 is still
+    # walking the last stretch. With this on, the bridge then cancels the
+    # NavigateToPose goal, waits for /odometry to report the base still, and
+    # calls the driver's /sit (std_srvs/Trigger). Sequence and outcomes are
+    # logged; ceai/bridge/finish.py. Set false (or delete the line) to leave
+    # the robot standing, which is the code default.
+    #
+    # Spot's services do not reliably cross zenoh (see the README
+    # section 2; the direct call alone sat nothing on 2026-09-19), so the
+    # finish is ALSO announced on finish_topic for ceai/finish_listener.py,
+    # which robot_onboard.launch.py runs beside spot_driver and which calls /sit
+    # where it is local. The direct call stays as a second attempt.
+    sit_on_finish: true
+    finish_topic: "/ceai/finish"
+    finish_announce_s: 3.0
+
+    # ---- namespacing ---------------------------------------------------------
+    # spot_driver runs with spot_name "" and config/spot_driver.yaml pins
+    # frame_prefix "", so both stay empty. If the driver is ever launched under
+    # a name, set namespace: "Spot" and frame_prefix: "Spot/" and every
+    # robot-side topic and frame follows automatically.
+    namespace: ""
+    frame_prefix: ""

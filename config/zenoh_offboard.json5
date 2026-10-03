@@ -1,0 +1,35 @@
+// the workstation side: LISTENS. The Pi connects out (it is the end that can open
+// the SSH tunnel), and one TCP session carries both directions.
+//
+// deny, NOT allow. The bridge accepts one or the other and PANICS at startup if
+// both are set ("unknown field 'deny'" -- the message names the wrong field).
+// Everything crosses except what is listed.
+{
+  mode: "peer",
+  listen: { endpoints: ["tcp/0.0.0.0:7447"] },
+  // Tailscale carries no multicast, so scouting on it is pure noise and can
+  // pair these bridges with unrelated peers on the local LAN.
+  scouting: { multicast: { enabled: false } },
+  plugins: {
+    ros2dds: {
+      domain: 0,
+      // Raw depth NEVER crosses: the cloud and the flattener run on the Pi so
+      // that only a 720-float /scan leaves. These patterns are FULL matches,
+      // not substrings, so "/camera/camera/depth/.*" does NOT catch
+      // "/camera/camera/aligned_depth_to_color/image_raw" -- which the policy
+      // needs and which is deliberately allowed. Verified 2026-09-15: the
+      // bridge logs each topic as "- Allowed" with the route it created.
+      //
+      // "/depth/.*" and "/scan_parts/.*" are Spot's body-camera streams and the
+      // partial scans they fed. Those topics do not exist today (the chain is
+      // off in config/spot_driver.yaml); the patterns stay so that turning it
+      // back on for a comparison run cannot saturate the link by accident.
+      deny: {
+        publishers:  ["/camera/camera/depth/.*", "/depth/.*", "/scan_parts/.*",
+                      "/rosout", "/parameter_events"],
+        subscribers: ["/camera/camera/depth/.*", "/depth/.*", "/scan_parts/.*",
+                      "/rosout", "/parameter_events"],
+      },
+    },
+  },
+}

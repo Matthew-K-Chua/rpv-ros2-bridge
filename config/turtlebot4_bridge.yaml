@@ -1,0 +1,50 @@
+# Bridge parameters for the TurtleBot 4 in the RGBD topology
+# (the TurtleBot 4 on the Pi's ethernet cable). Loaded by node name --
+# `nav2_vlfm_bridge` must match ceai/rpv_bridge.py's node name or NOTHING here
+# is applied, silently.
+#
+#   python3 -m ceai.rpv_bridge --ros-args --params-file config/turtlebot4_bridge.yaml
+#
+# config/spot_bridge.yaml with the Spot-only deployment choices removed. Frames,
+# topics and geometry come from `robot: "turtlebot4"` (ceai/robots/turtlebot4.py);
+# this file carries only DEPLOYMENT choices. Each Spot value that was kept is
+# kept for a reason given beside it; see spot_bridge.yaml for the measurements.
+
+nav2_vlfm_bridge:
+  ros__parameters:
+    robot: "turtlebot4"
+
+    target: "chair"
+    # The SPOT policy server, knowingly (section 3.4 of the plan): launch_offboard.sh
+    # pins policy_url to /rpv_policy on the command line anyway; written here
+    # so a bare run matches. Its agent_radius (0.25), pointnav_stop_radius
+    # (1.4 m) and min_object_distance (0.5 m) are Spot's, not this robot's --
+    # report them with any result.
+    policy_url: "http://127.0.0.1:13000/rpv_policy"
+
+    depth_source: "realsense"
+    # The D435's band from ceai/cameras.py, same as Spot: the sensor did not
+    # change. Keep both files in step.
+    min_depth: 0.3
+    max_depth: 3.0
+
+    # Off: the hold was for Spot's stepping turns, whose yaw rate dips between
+    # steps. The Create 3 turns smoothly.
+    motion_still_hold: 0.0
+
+    # Measured on Spot (2026-09-12, 2026-09-19), but the failures they prevent
+    # -- goal preemption storms, goals off the SLAM map -- are Nav2's, not the
+    # robot's.
+    goal_epsilon_m: 0.25
+    goal_epsilon_yaw: 0.0
+    clamp_goal_to_map: true
+    goal_map_margin_m: 0.3
+
+    max_steps: 500
+
+    # No /sit on this robot. With it true the finish sequence waits
+    # finish_service_timeout (10 s) for a service that never appears.
+    sit_on_finish: false
+
+    namespace: ""
+    frame_prefix: ""

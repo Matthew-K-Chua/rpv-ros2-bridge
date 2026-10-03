@@ -1,0 +1,419 @@
+# Nav2 parameters for Spot.
+#
+# Derived from the Humble defaults at
+
+# /opt/ros/humble/share/nav2_bringup/params/nav2_params.yaml (nav2_bringup
+# 1.1.20): every value NOT commented on below is that file's default. The
+# changes are (1) frames/topics retargeted to Spot, (2) the footprint POLYGON,
+# (3) a holonomic-capable controller, (4) velocity/accel limits, (5) the
+# inflation-vs-Spot's-own-avoidance stance from plan Part 6.
+#
+# No amcl / map_server / map_saver sections: nav_stack.launch.py starts Nav2
+# via navigation_launch.py (no localization stack) and slam_toolbox supplies
+# /map and the map->vision transform.
+#
+# 2026-09-16: /scan now comes from ONE D435 on the Pi, not from Spot's body
+# cameras. Both live obstacle layers are RESTORED below -- they were removed on
+# 2026-09-12 solely because the body cameras saw Spot's own legs, and the D435
+# looks outward from the front of the body and cannot. That was the single
+# highest-value line in the change.
+#
+# The laser range numbers here have a partner in ceai/cameras.py and in
+# slam_toolbox's min/max_laser_range; keep them in step with ceai/cameras.py,
+# they still agree, because drift between them fails silently.
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: False
+    global_frame: map
+    robot_base_frame: body            # Spot's base frame; frame_prefix is "" (config/spot_driver.yaml)
+    odom_topic: /odometry             # spot_driver's topic (state_middleware_handle.cpp:26), ns ""
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_smooth_path_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_spin_action_bt_node
+      - nav2_wait_action_bt_node
+      - nav2_assisted_teleop_action_bt_node
+      - nav2_back_up_action_bt_node
+      - nav2_drive_on_heading_bt_node
+      - nav2_clear_costmap_service_bt_node
+      - nav2_is_stuck_condition_bt_node
+      - nav2_goal_reached_condition_bt_node
+      - nav2_goal_updated_condition_bt_node
+      - nav2_globally_updated_goal_condition_bt_node
+      - nav2_is_path_valid_condition_bt_node
+      - nav2_initial_pose_received_condition_bt_node
+      - nav2_reinitialize_global_localization_service_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_distance_controller_bt_node
+      - nav2_speed_controller_bt_node
+      - nav2_truncate_path_action_bt_node
+      - nav2_truncate_path_local_action_bt_node
+      - nav2_goal_updater_node_bt_node
+      - nav2_recovery_node_bt_node
+      - nav2_pipeline_sequence_bt_node
+      - nav2_round_robin_node_bt_node
+      - nav2_transform_available_condition_bt_node
+      - nav2_time_expired_condition_bt_node
+      - nav2_path_expiring_timer_condition
+      - nav2_distance_traveled_condition_bt_node
+      - nav2_single_trigger_bt_node
+      - nav2_goal_updated_controller_bt_node
+      - nav2_is_battery_low_condition_bt_node
+      - nav2_navigate_through_poses_action_bt_node
+      - nav2_navigate_to_pose_action_bt_node
+      - nav2_remove_passed_goals_action_bt_node
+      - nav2_planner_selector_bt_node
+      - nav2_controller_selector_bt_node
+      - nav2_goal_checker_selector_bt_node
+      - nav2_controller_cancel_bt_node
+      - nav2_path_longer_on_approach_bt_node
+      - nav2_wait_cancel_bt_node
+      - nav2_spin_cancel_bt_node
+      - nav2_back_up_cancel_bt_node
+      - nav2_assisted_teleop_cancel_bt_node
+      - nav2_drive_on_heading_cancel_bt_node
+      - nav2_is_battery_charging_condition_bt_node
+
+bt_navigator_navigate_through_poses_rclcpp_node:
+  ros__parameters:
+    use_sim_time: False
+
+bt_navigator_navigate_to_pose_rclcpp_node:
+  ros__parameters:
+    use_sim_time: False
+
+controller_server:
+  ros__parameters:
+    use_sim_time: False
+    odom_topic: /odometry
+    # 20 Hz (default). Spot drops a velocity command after cmd_duration 0.25 s
+    # (config/spot_driver.yaml), so anything sustained above 4 Hz keeps the
+    # robot fed; 20 Hz leaves a 5x margin. Chapter test_md/01 measures whether
+    # the wire actually delivers this rate; /08 proves it end to end.
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    # Default is 0.5, which zeroes out lateral odometry -- correct for a
+    # diff-drive TB3, wrong for a strafing robot. JUDGEMENT CALL:
+    # 0.05 keeps genuine strafe motion visible to progress checking while
+    # still filtering noise.
+    min_y_velocity_threshold: 0.05
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      # Default 10 s. This is the parameter that turns "Spot's own avoidance
+      # refused our velocity" into a Nav2 recovery storm (plan Part 6): when
+      # Spot silently refuses, no movement accrues and this timer decides when
+      # Nav2 declares "stuck". TODO(test_md/08): tune against observed refusal
+      # behaviour near an obstacle -- long enough to ride out a brief refusal,
+      # short enough that a real deadlock replans promptly.
+      movement_time_allowance: 10.0
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25
+
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      desired_linear_vel: 0.5
+      lookahead_dist: 0.6
+      min_lookahead_dist: 0.4
+      max_lookahead_dist: 1.0
+      use_velocity_scaled_lookahead_dist: true
+      use_rotate_to_heading: true
+      rotate_to_heading_min_angle: 0.6      # rad; turn in place first if off by more
+      rotate_to_heading_angular_vel: 0.6
+      max_angular_accel: 6.5
+      use_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: true   # slows near walls, helps d)
+      cost_scaling_dist: 0.8
+      cost_scaling_gain: 1.0
+      inflation_cost_scaling_factor: 2.0    # must equal the inflation layer's value
+      use_collision_detection: true
+      allow_reversing: false
+      transform_tolerance: 0.2
+
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      # vision, not odom: the rolling window must live in the frame that
+      # continuously parents body -- config/spot_driver.yaml roots the tree at
+      # vision and slam ties map->vision (see tf_root comment there).
+      global_frame: vision
+      robot_base_frame: body
+      use_sim_time: False
+      rolling_window: true
+      # 3x3 m (default) barely contains a 1.1 m robot plus sim_time * max speed
+      # of lookahead. JUDGEMENT: 5x5 m.
+      width: 5
+      height: 5
+      resolution: 0.05
+      # FOOTPRINT POLYGON, replacing the TB4-era robot_radius circle
+      # (plan Part 1: "Spot is ~1.1 x 0.5 m ... nose is ~0.55 m from body
+      # centre" -- so the polygon is body-centred, +/-0.55 x, +/-0.25 y).
+      # TODO(test_md/08): the plan's numbers cover the BODY; leg splay during a
+      # fast walk reaches wider than 0.5 m and no source in this workspace
+      # quantifies it. Confirm clearance near an obstacle at the gate before
+      # trusting corridors narrower than ~1 m.
+      footprint: "[[0.55, 0.25], [0.55, -0.25], [-0.55, -0.25], [-0.55, 0.25]]"
+      # RESTORED 2026-09-16 (removed 2026-09-12, for one reason only).
+      #
+      # The removal was forced by Spot's side and rear body cameras seeing
+      # Spot's own upper legs: a phantom obstacle that MOVES WITH THE ROBOT and
+      # can never be cleared. With no obstacle source the costmap read free
+      # everywhere and the BaseObstacle critic (scale 0.02) contributed nothing,
+      # which INVERTED the Part 6 design intent -- Nav2 was supposed to be more
+      # conservative than Spot's own avoidance so it replanned BEFORE Spot
+      # refused, and instead Nav2 was the aggressive one and Spot always refused
+      # first.
+      #
+      # /scan now comes from a single forward-facing D435 that cannot see the
+      # legs, so the reason is gone. WATCH FOR: a ring of near returns at the
+      # leg bearings on a standing scan. If one appears, the mount pose or the
+      # height band is wrong -- fix that, do not delete this layer again.
+      plugins: ["voxel_layer", "inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 2.0
+        # THE Part 6 number. Requirement: Nav2's inflation must be MORE
+        # conservative than Spot's own body-obstacle-avoidance padding, so that
+        # when space tightens Nav2 gives up and replans BEFORE Spot starts
+        # refusing velocities (refusals look like "stuck" to Nav2, which then
+        # triggers recoveries that get refused in turn -- the deadlock this
+        # file must design against). Spot's padding value is NOT published in
+        # this workspace's files. 0.55 is the Humble default and is retained
+        # here as a starting point ONLY.
+        # TODO(test_md/08): drive near an obstacle, find the distance at which
+        # Spot begins refusing cmd_vel, then set this so the inflated footprint
+        # keeps Nav2's paths OUTSIDE that distance. Record the measured value
+        # in chapter 08's table.
+        #
+        # (2026-09-16) With one forward wedge this costmap has no live evidence
+        # on the flanks or behind, so this margin is doing two jobs again: the
+        # Part 6 one above, AND standing in for sensing the robot does not have.
+        # Anything that moves into the flanks after the robot has passed is
+        # invisible to Nav2 and is Spot's own avoidance to handle.
+        inflation_radius: 0.75
+      voxel_layer:
+        plugin: "nav2_costmap_2d::VoxelLayer"
+        enabled: True
+        publish_voxel_map: True
+        # The voxel column must contain the height /scan's points land at.
+        # /scan's frame is `body`, whose origin was MEASURED 0.58 m above the
+        # floor on 2026-09-12, and this costmap's frame is `vision`. origin_z
+        # -0.30 with 26 voxels of 0.05 spans -0.30..1.00 m, which contains it
+        # with margin for Spot bobbing as it walks. Do not raise origin_z above
+        # 0 without checking that the scan plane is still inside the column --
+        # outside it, every return is silently dropped.
+        origin_z: -0.30
+        z_resolution: 0.05
+        z_voxels: 26
+        max_obstacle_height: 2.0
+        mark_threshold: 0
+        # /scan is one D435 wedge, built on the Pi (launch/robot_onboard.launch.py:
+        # depth image -> PointCloudXyzNode -> pointcloud_to_laserscan). Since
+        # 2026-09-17 it is published on the camera's ~87 deg ONLY, and a bin
+        # with no in-band return carries ceai/cameras.py no_return_range_m
+        # (9.9 with a 10.0 range_max) instead of +inf. That value is ABOVE
+        # obstacle_max_range, so this layer never marks it, and the bearing
+        # is cleared out to raytrace_max_range -- asserted in
+        # ceai/cameras.py. Bearings outside the wedge are
+        # not in the message at all, so the flanks and rear stay UNSEEN, which
+        # is why the inflation radius below still matters.
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          # obstacle_max_range IS ceai/cameras.py obstacle_range_m (3.0, the
+          # distance inside which this D435's returns are trustworthy, 169aa79)
+          # and raytrace_max_range is its raytrace_range_m (3.5). NOT the
+          # flattener's range_max (10.0): /scan carries returns and the
+          # no-return fill out to ~10 m so the room is visible, but a reading
+          # past 3.0 must neither mark (stereo noise from ~3.2 m out was
+          # painted into the map) nor clear 10 m of cells on the strength of a
+          # bin that cannot tell "floor only" from "stereo dropout on a wall".
+          # obstacle_max_range sits just INSIDE raytrace_max_range so marking
+          # never outruns clearing.
+          #
+          # 2026-09-16 FIX: raytrace_max_range was 2.0 against obstacle_max_range
+          # 3.5, i.e. marking outran clearing by 1.5 m -- obstacles between 2 and
+          # 3.5 m were marked and could never be raytraced away.
+          raytrace_max_range: 3.5
+          raytrace_min_range: 0.0
+          obstacle_max_range: 3.0
+          # 0.0, not 0.3: the flattener already drops anything nearer than
+          # range_min, and raising this would ALSO stop the layer clearing
+          # stale near cells. Obstacles inside ~0.3 m are simply invisible --
+          # that gap is covered by inflation_radius and stop_standoff_m, not
+          # here. NOTE the same 0.3 m floor is what keeps Spot's own legs out of
+          # the scan; if test_md/05 has to raise the flattener's range_min to
+          # kill leg returns, the invisible band grows with it.
+          obstacle_min_range: 0.0
+      always_send_full_costmap: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: body
+      use_sim_time: False
+      footprint: "[[0.55, 0.25], [0.55, -0.25], [-0.55, -0.25], [-0.55, 0.25]]"  # see local_costmap note
+      resolution: 0.05
+      track_unknown_space: true
+      # 2026-09-16: sized and centred so the robot is INSIDE it before SLAM
+      # publishes a map. The Nav2 default (5 x 5 m with its origin at 0,0) put
+      # the robot outside on every cold start: "Robot is out of bounds of the
+      # costmap!" x55, once a second for 58 s, in the 2026-09-12 run. It cleared
+      # itself when the first map arrived and did no visible harm, but it recurs
+      # on every start and buries the log. static_layer resizes this costmap to
+      # the SLAM map the moment one arrives, so these only describe the gap
+      # before that.
+      width: 30
+      height: 30
+      origin_x: -15.0
+      origin_y: -15.0
+      # RESTORED 2026-09-16 (removed 2026-09-12, for one reason only).
+      #
+      # The removal was forced by leg returns putting the robot's OWN FOOTPRINT
+      # in collision -- the planner failed 38 times to reach (0.63, 0.21). The
+      # note left at the time was honest that it fixed nothing: slam_toolbox
+      # builds /map from the same /scan, so the legs were still baked into
+      # static_layer as the robot drove.
+      #
+      # The forward-facing D435 cannot see the legs, so both symptoms go with
+      # the sensor rather than with this plugin list.
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          # D435 band -- see the local_costmap scan comment: obstacle_range_m
+          # and raytrace_range_m from ceai/cameras.py, NOT range_max.
+          # obstacle_max_range MUST stay BELOW the flattener's no-return fill
+          # (no_return_range_m, 9.9 m). Left at 8.0/7.5 when the band came
+          # back to 4.0 (169aa79, 2026-09-18), this layer MARKED every
+          # no-return bin as lethal at 3.9 m: a near-perfect ring of obstacles
+          # around the robot at the band edge, walling in every frontier goal
+          # -- MEASURED 2026-09-18 19:49, no_navigation.webm, rviz global
+          # costmap, ring radius 3.9 grid cells of 1 m. Asserted in
+          # ceai/cameras.py obstacle_range_m.
+          raytrace_max_range: 3.5
+          raytrace_min_range: 0.0
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.0
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.75   # see local_costmap inflation comment (Part 6)
+      always_send_full_costmap: True
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    use_sim_time: False
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+smoother_server:
+  ros__parameters:
+    use_sim_time: False
+    smoother_plugins: ["simple_smoother"]
+    simple_smoother:
+      plugin: "nav2_smoother::SimpleSmoother"
+      tolerance: 1.0e-10
+      max_its: 1000
+      do_refinement: True
+
+behavior_server:
+  ros__parameters:
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
+    cycle_frequency: 10.0
+    # /spin here is what the bridge's INIT 360-degree scan calls
+    # (ceai/rpv_bridge.py, spin_action parameter).
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "assisted_teleop", "wait"]
+    spin:
+      plugin: "nav2_behaviors/Spin"
+      max_rotational_vel: 0.5
+      min_rotational_vel: 0.2
+      rotational_acc_lim: 1
+    backup:
+      plugin: "nav2_behaviors/BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors/DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors/Wait"
+    assisted_teleop:
+      plugin: "nav2_behaviors/AssistedTeleop"
+    global_frame: vision       # matches local_costmap; behaviors run in the continuous frame
+    robot_base_frame: body
+    transform_tolerance: 0.5
+    use_sim_time: False
+    simulate_ahead_time: 2.0
+    # TODO(unsourced): default rotation limits; the INIT scan's 30-degree spins
+    # will use them. Watch foot slip during test_md/12 before raising.
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+waypoint_follower:
+  ros__parameters:
+    use_sim_time: False
+    loop_rate: 20
+    stop_on_failure: false
+    waypoint_task_executor_plugin: "wait_at_waypoint"
+    wait_at_waypoint:
+      plugin: "nav2_waypoint_follower::WaitAtWaypoint"
+      enabled: True
+      waypoint_pause_duration: 200
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: False
+    # 20 Hz output: the actual /cmd_vel publisher on the wire to spot_driver;
+    # this is the rate the >4 Hz cmd_duration requirement bites on (test_md/01).
+    smoothing_frequency: 20.0
+    scale_velocities: False
+    feedback: "OPEN_LOOP"
+    # Mirrors the FollowPath limits above (same TODO(unsourced) status).
+    max_velocity: [0.5, 0.0, 1.0]
+    min_velocity: [0.0, 0.0, -1.0]
+    max_accel: [0.5, .50, 1.0]
+    max_decel: [-0.5, -0.5, -1.0]
+    odom_topic: "/odometry"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0

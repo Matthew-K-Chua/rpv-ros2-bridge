@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast DDS profile for the Pi (embodied-desktop). Installed as
+  ~/fastdds_no_shm.xml and exported from .bashrc as
+  FASTRTPS_DEFAULT_PROFILES_FILE (see the README). This copy is the record;
+  the Pi's file is what runs.
+
+  Two things it does:
+
+  1. UDPv4 only, no shared memory. Stale /dev/shm/fastrtps_* lock files after
+     a crash broke same-machine discovery on the Pi (2026-08-25: `ros2 topic
+     list` empty, "Failed init_port fastrtps_portNNNN").
+
+  2. An interface whitelist: the ethernet cable (10.0.0.4, the Pi's address to
+     the robot on both Spot and the TurtleBot 4) and loopback. MEASURED
+     2026-09-26 with the TurtleBot 4 on the cable: without the whitelist Fast
+     DDS advertises eth0, wlan0 and tailscale0, the TurtleBot 4's Cyclone DDS
+     (pinned to 10.0.0.3) discovers us and never delivers data; every whitelist
+     that includes 10.0.0.4 delivers (six failures against six passes, one
+     `ros2 topic echo` each). The mechanism was not measured. Deep-Thought is
+     reached over zenoh, never DDS, so wlan0 and tailscale0 are not needed
+     here. UNVERIFIED that loopback alone keeps the Pi's own nodes talking with
+     the cable unplugged.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <transport_descriptors>
+        <transport_descriptor>
+            <transport_id>UDPv4_transport</transport_id>
+            <type>UDPv4</type>
+            <interfaceWhiteList>
+                <address>10.0.0.4</address>
+                <address>127.0.0.1</address>
+            </interfaceWhiteList>
+        </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="disable_shm" is_default_profile="true">
+        <rtps>
+            <userTransports>
+                <transport_id>UDPv4_transport</transport_id>
+            </userTransports>
+            <useBuiltinTransports>false</useBuiltinTransports>
+        </rtps>
+    </participant>
+</profiles>

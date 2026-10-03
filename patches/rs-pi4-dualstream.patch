@@ -1,0 +1,215 @@
+diff --git a/realsense2_camera/include/ros_sensor.h b/realsense2_camera/include/ros_sensor.h
+index 81a21a6f..256426ec 100644
+--- a/realsense2_camera/include/ros_sensor.h
++++ b/realsense2_camera/include/ros_sensor.h
+@@ -87,6 +87,12 @@ namespace realsense2_camera
+             void registerSensorParameters();
+             bool getUpdatedProfiles(std::vector<rs2::stream_profile>& wanted_profiles);
+             virtual bool start(const std::vector<rs2::stream_profile>& profiles);
++            // PATCH (Pi 4 / VL805): open-all-then-start-all. Opening a second UVC
++            // stream while the first is already streaming fails on this host with
++            // VIDIOC_S_FMT errno=5. librealsense's own rs2::pipeline opens every
++            // sensor before starting any, which is why the pipeline tools work.
++            bool openOnly(const std::vector<rs2::stream_profile>& profiles);
++            void startStreamingOnly(const std::vector<rs2::stream_profile>& profiles);
+             void stop();
+             rmw_qos_profile_t getQOS(const stream_index_pair& sip) const;
+             rmw_qos_profile_t getInfoQOS(const stream_index_pair& sip) const;
+diff --git a/realsense2_camera/src/ros_sensor.cpp b/realsense2_camera/src/ros_sensor.cpp
+index fd95c728..4ff3007e 100644
+--- a/realsense2_camera/src/ros_sensor.cpp
++++ b/realsense2_camera/src/ros_sensor.cpp
+@@ -14,6 +14,7 @@
+ 
+ #include <ros_sensor.h>
+ #include <assert.h>
++#include <cstdlib>
+ 
+ using namespace realsense2_camera;
+ using namespace rs2;
+@@ -49,7 +50,25 @@ void RosSensor::setupErrorCallback()
+         if (error_strings.end() != find_if(error_strings.begin(), error_strings.end(), [&n] (std::string err) 
+                                     {return (n.get_description().find(err) != std::string::npos); }))
+         {
+-            _hardware_reset_func();
++            // PATCH (Raspberry Pi 4 / VL805 USB host): do NOT hardware-reset by
++            // default. A D435 on FW 5.12.12.100 emits a spurious "RT IC2 Config
++            // error" about a second after streaming starts. Resetting in response
++            // tears the device off the bus mid-stream (VIDIOC_QBUF -> ENODEV,
++            // depth collapses from 30Hz to ~6Hz), and repeated resets leave the
++            // USB3 link unable to re-enumerate until the camera is physically
++            // replugged. Measured: 4 of 8 cold starts degraded this way with the
++            // reset enabled, 0 of 12 with it disabled.
++            // Set REALSENSE_AUTO_HW_RESET=1 to restore upstream behaviour.
++            const char* auto_reset = getenv("REALSENSE_AUTO_HW_RESET");
++            if (auto_reset && std::string(auto_reset) == "1")
++            {
++                _hardware_reset_func();
++            }
++            else
++            {
++                ROS_WARN_STREAM("Ignoring hardware notification \"" << n.get_description()
++                    << "\" (auto hardware-reset disabled; set REALSENSE_AUTO_HW_RESET=1 to re-enable)");
++            }
+         }
+     });
+ }
+@@ -252,6 +271,31 @@ void RosSensor::registerSensorParameters()
+     }
+ }
+ 
++bool RosSensor::openOnly(const std::vector<stream_profile>& profiles)
++{
++    if (get_active_streams().size() > 0)
++        return false;
++    setupErrorCallback();
++    rs2::sensor::open(profiles);
++
++    for (auto& profile : profiles)
++    ROS_INFO_STREAM("Open profile: " << ProfilesManager::profile_string(profile));
++
++    return true;
++}
++
++void RosSensor::startStreamingOnly(const std::vector<stream_profile>& profiles)
++{
++    rs2::sensor::start(_frame_callback);
++
++    for (auto& profile : profiles)
++    {
++        stream_index_pair sip(profile.stream_type(), profile.stream_index());
++        if (_diagnostics_updater)
++            _frequency_diagnostics.emplace(sip, FrequencyDiagnostics(STREAM_NAME(sip), profile.fps(), _diagnostics_updater));
++    }
++}
++
+ bool RosSensor::start(const std::vector<stream_profile>& profiles)
+ {
+     if (get_active_streams().size() > 0)
+diff --git a/realsense2_camera/src/rs_node_setup.cpp b/realsense2_camera/src/rs_node_setup.cpp
+index 3eccadce..1e584e34 100755
+--- a/realsense2_camera/src/rs_node_setup.cpp
++++ b/realsense2_camera/src/rs_node_setup.cpp
+@@ -15,6 +15,9 @@
+ #include "../include/base_realsense_node.h"
+ #include <image_publisher.h>
+ #include <fstream>
++#include <algorithm>
++#include <thread>
++#include <chrono>
+ #include <rclcpp/qos.hpp>
+ #include "pointcloud_filter.h"
+ #include "align_depth_filter.h"
+@@ -491,9 +494,16 @@ void BaseRealSenseNode::stopRequiredSensors()
+ void BaseRealSenseNode::startUpdatedSensors()
+ {
+     try{
++        // PATCH (Raspberry Pi 4 / VL805 USB host): perform every calibration read
++        // while the device is still idle, then start the sensors in a second pass.
++        // Upstream interleaves the two per sensor, so on a host whose UVC
++        // extension-unit channel stops answering once an isochronous stream is
++        // open, the SECOND sensor's get_intrinsics()/get_extrinsics_to() time out
++        // and abort bringup (depth streams, colour never starts).
++        std::vector<std::pair<RosSensor*, std::vector<stream_profile>>> sensors_to_start;
++
+         for(auto&& sensor : _available_ros_sensors)
+         {
+-            std::string module_name(rs2_to_ros(sensor->get_info(RS2_CAMERA_INFO_NAME)));
+             // if active_profiles != wanted_profiles: stop sensor.
+             std::vector<stream_profile> wanted_profiles;
+ 
+@@ -519,6 +529,13 @@ void BaseRealSenseNode::startUpdatedSensors()
+                         }
+                     }
+ 
++                    // Read while idle -- get_depth_scale goes over the same
++                    // control channel that stalls once a stream is open.
++                    if (sensor->rs2::sensor::is<rs2::depth_sensor>())
++                    {
++                        _depth_scale_meters = sensor->as<rs2::depth_sensor>().get_depth_scale();
++                    }
++
+                     if (is_profile_changed
+                             #if defined (ACCELERATE_GPU_WITH_GLSL)
+                                 || _is_accelerate_gpu_with_glsl_changed
+@@ -527,17 +544,76 @@ void BaseRealSenseNode::startUpdatedSensors()
+                     {
+                         // Start/stop sensors only if profile or gpu acceleration was changed
+                         // No need to start/stop sensors if align_depth was changed
+-                        ROS_INFO_STREAM("Starting Sensor: " << module_name);
+-                        sensor->start(wanted_profiles);
++                        sensors_to_start.emplace_back(sensor.get(), wanted_profiles);
+                     }
++                }
++            }
++        }
+ 
+-                    if (sensor->rs2::sensor::is<rs2::depth_sensor>())
++        // Second pass: all calibration is cached in _camera_info/_static_tf_msgs by
++        // now, so it is safe to open the streams.
++        //
++        // Open order matters on this host. Measured over 18 fresh processes per
++        // ordering against librealsense directly: opening the Stereo module
++        // first and the RGB camera second fails inside rs2_open_multiple with
++        // VIDIOC_S_FMT errno=5 (EIO) on 5 of 18 runs, while opening the RGB
++        // camera first and the Stereo module second succeeded on 18 of 18. Sort
++        // the non-depth sensors to the front so the RGB camera negotiates its
++        // UVC bandwidth before the much larger depth allocation exists.
++        std::stable_sort(sensors_to_start.begin(), sensors_to_start.end(),
++            [](const std::pair<RosSensor*, std::vector<stream_profile>>& a,
++               const std::pair<RosSensor*, std::vector<stream_profile>>& b)
++            {
++                return !a.first->rs2::sensor::is<rs2::depth_sensor>()
++                     &&  b.first->rs2::sensor::is<rs2::depth_sensor>();
++            });
++
++        std::vector<std::pair<RosSensor*, std::vector<stream_profile>>> sensors_opened;
++        for (auto& to_start : sensors_to_start)
++        {
++            std::string module_name(rs2_to_ros(to_start.first->get_info(RS2_CAMERA_INFO_NAME)));
++            ROS_INFO_STREAM("Opening Sensor: " << module_name);
++
++            // That EIO is a transient failure of the UVC control transfer, not a
++            // rejection of the profile, so retry it here. Letting it propagate
++            // reaches RealSenseNodeFactory::startDevice(), whose hardware_reset()
++            // wedges the control channel and turns one bad open into a permanent
++            // stream of UVCIOC_CTRL_QUERY timeouts that only a replug clears.
++            const int max_attempts = 5;
++            bool opened = false;
++            for (int attempt = 1; attempt <= max_attempts; ++attempt)
++            {
++                try
++                {
++                    opened = to_start.first->openOnly(to_start.second);
++                    break;
++                }
++                catch (const rs2::error& e)
++                {
++                    if (attempt == max_attempts)
+                     {
+-                        _depth_scale_meters = sensor->as<rs2::depth_sensor>().get_depth_scale();
++                        ROS_ERROR_STREAM("Opening Sensor: " << module_name << " failed after "
++                                         << max_attempts << " attempts: " << e.what());
++                        throw;
+                     }
++                    ROS_WARN_STREAM("Opening Sensor: " << module_name << " failed (attempt "
++                                    << attempt << "/" << max_attempts << "): " << e.what()
++                                    << " -- retrying");
++                    // open() left nothing open when it threw, but close() is cheap
++                    // insurance against a partially-applied profile.
++                    try { to_start.first->rs2::sensor::close(); } catch (const rs2::error&) {}
++                    std::this_thread::sleep_for(std::chrono::milliseconds(200 * attempt));
+                 }
+             }
++            if (opened)
++                sensors_opened.push_back(to_start);
+         }
++        for (auto& opened : sensors_opened)
++        {
++            ROS_INFO_STREAM("Starting Sensor: " << rs2_to_ros(opened.first->get_info(RS2_CAMERA_INFO_NAME)));
++            opened.first->startStreamingOnly(opened.second);
++        }
++
+         if (_publish_tf)
+         {
+             std::lock_guard<std::mutex> lock_guard(_publish_tf_mutex);

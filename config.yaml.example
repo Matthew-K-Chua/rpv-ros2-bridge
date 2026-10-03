@@ -1,0 +1,12 @@
+# Copy to config.yaml and fill in. config.yaml is git-ignored — never commit real
+# credentials.
+#
+# Spot credentials, read by launch/includes/spot_driver.include.py when the
+# SPOT_LOGIN_YAML environment variable (or the spot_login launch argument) points
+# at it. Exported BOSDYN_CLIENT_USERNAME / BOSDYN_CLIENT_PASSWORD / SPOT_IP win
+# over it. The TurtleBot 4 does not use this file.
+/**:
+  ros__parameters:
+    username: "<spot-username>"
+    password: "<spot-password>"
+    hostname: "<spot-ip>"

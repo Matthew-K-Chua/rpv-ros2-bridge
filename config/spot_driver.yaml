@@ -1,0 +1,144 @@
+# spot_driver parameters for the CEAI Spot deployment (Phase 2 of
+# the Spot bring-up plan). Derived from
+# ~/ros2_ws/src/spot_ros2/spot_driver/config/spot_ros_example.yaml -- whose own
+# first line says it "is not used!", which is exactly why every safety-relevant
+# value below is set EXPLICITLY here instead of trusted to a default.
+#
+# Passed to spot_driver by launch/includes/spot_driver.include.py, which
+# launch/robot_onboard.launch.py includes when robot:=spot (spot_config arg).
+# Run against the robot 2026-09-09 (test_md_02 S1/S2); the camera block below
+# changed 2026-09-16 and has not.
+
+/**:
+  ros__parameters:
+    # ---- Login ----------------------------------------------------------------
+    # DELIBERATELY ABSENT. This file is committed; the credentials are not, and
+    # not even as a git-ignored file inside the repo (one `git add -f` away from
+    # the history). They live in a site yaml outside the repo entirely, named by
+    # launch/robot_onboard.launch.py's spot_login argument, which exports them as
+    # BOSDYN_CLIENT_USERNAME / BOSDYN_CLIENT_PASSWORD / SPOT_IP before the driver
+    # starts. The driver reads those env vars first and only then falls back to
+    # parameters here (spot_driver/spot_driver/spot_ros2.py:492-495; and at
+    # launch time spot_common/.../spot_launch_helpers.py:157-172).
+    #
+    # Do not uncomment the three keys below as a shortcut -- an edit that "just
+    # for now" puts a real password here is a commit away from leaking it.
+    # username: "user"
+    # password: "password"
+    # hostname: "10.0.0.3"       # MEASURED 2026-09-09: Spot ON THE PI'S ETHERNET (Pi is 10.0.0.4/24)
+    #                            # SEGMENT -- the rear payload port, NOT the
+    #                            # 192.168.80.3 WiFi AP address this line used to
+    #                            # carry. As of 2026-09-07 Spot does not join a site
+    #                            # router at all: it is wired to the Pi, and
+    #                            # the workstation reaches it through the Pi's Tailscale
+    #                            # subnet route (design doc, System Architecture).
+    #                            # Confirm the actual address on the robot.
+
+    # ---- E-stop: the highest-consequence block in this file -------------------
+    # start_estop MUST be False, permanently (design doc, Safety; plan Part 1 and
+    # the Part 6 "E-stop eviction" risk). If the driver takes an E-stop endpoint
+    # it does so via spot_wrapper -> EstopEndpoint.force_simple_setup(), which
+    # REPLACES the whole estop configuration with a single-endpoint one and
+    # thereby EVICTS THE TABLET -- the tablet's stop button silently loses
+    # authority. spot_wrapper's own default is start_estop=True
+    # (~/ros2_ws/src/spot_ros2/spot_wrapper/spot_wrapper/wrapper.py:360), so an
+    # unset parameter is only safe if the ROS layer's default (False in this
+    # checkout, spot_driver/spot_driver/spot_ros2.py:385) never changes -- do
+    # not rely on that. Set here, verified POSITIVELY on the robot in
+    # test_md/00 (press the tablet stop with the driver up, watch motors cut).
+    start_estop: False
+    # 9 s: every registered endpoint must check in within this window or the
+    # robot cuts motor power on its own (spot_ros2.py:382 default, example
+    # yaml line 23; the fail-safe timeout test_md/00 exercises by pulling the
+    # tablet's network).
+    estop_timeout: 9.0
+
+    # ---- Lifecycle: nothing automatic -----------------------------------------
+    # claim / power_on / stand are DELIBERATE acts, driven by the lifecycle
+    # (an earlier proof-of-concept Spot client) and by the
+    # test book's chapter 03 -- never by the driver coming up.
+    # (example yaml lines 18-20)
+    auto_claim: False
+    auto_power_on: False
+    auto_stand: False
+
+    # ---- Frames ----------------------------------------------------------------
+    # vision, not odom: Spot's odom frame is kinematic leg odometry and drifts
+    # with foot slip, worst during the in-place 360-degree INIT scan; vision is
+    # VO-corrected and what BD intends for mapping ("Decisions taken" table).
+    preferred_odom_frame: "vision"
+    # tf_root vision as well -- JUDGEMENT CALL: slam_toolbox
+    # publishes map->odom_frame, and we point its odom_frame at vision
+    # (launch/nav_stack.launch.py). If vision were a CHILD in the driver's
+    # tree (tf_root: odom), slam's map->vision edge would give vision two
+    # parents and break TF. Allowed values [odom, vision, body] per the example
+    # yaml line 27. Verify the resulting tree in test_md/06.
+    tf_root: "vision"
+    # Empty spot_name + explicit empty frame_prefix -> TF tree is plain
+    # body/odom/vision and topics are unnamespaced (/odometry, /cmd_vel), so
+    # slam/Nav2 configs need no per-robot frame surgery (plan Part 1,
+    # "Recommendation on frames"). Left unset, the prefix would default to
+    # "<spot_name>/" (spot_ros2.py:501-503).
+    spot_name: ""
+    frame_prefix: ""
+
+    # ---- Control path ----------------------------------------------------------
+    # 0.25 s command duration -> Nav2 must publish /cmd_vel above 4 Hz
+    # sustained or Spot stutters (example yaml line 33; measured against
+    # nav2_spot.yaml's 20 Hz controller in test_md/01 and /08). NOTE the
+    # driver code default is 0.125 s (spot_ros2.py:383) -- another reason to
+    # pin it here explicitly.
+    cmd_duration: 0.25
+
+    # ---- Rates -----------------------------------------------------------------
+    # (example yaml lines 11-15)
+    robot_state_rate: 50.0   # joint state / TF / status
+    # MOOT since 2026-09-16: the driver publishes no images at all (see the
+    # Cameras block below), so this rate governs nothing. Left at the value the
+    # 2026-09-12 investigation settled on, in case the body cameras are ever
+    # brought back for a comparison run.
+    image_rate: 5.0
+    metrics_rate: 0.04
+    lease_rate: 1.0
+    async_tasks_rate: 10.0
+
+    # ---- Cameras: OFF, deliberately, since 2026-09-16 --------------------------
+    # Spot's five body depth cameras are no longer a sensor in this stack.
+    # /scan comes from ONE D435 on the Pi (launch/robot_onboard.launch.py), which is
+    # what the design doc asks for and what makes the stack portable: a robot
+    # that publishes /cmd_vel and odometry, plus a D435 on a Pi, is now a
+    # complete system.
+    #
+    # WHY THEY WENT, beyond portability -- all measured, all in the 2026-09-12
+    # run on 2026-09-12:
+    #   * the Pi could not hold the chain up. Five cameras had already been cut
+    #     to three; /scan still measured 0.38 s stale AT THE PI and ~2 Hz
+    #     against a configured 5 Hz.
+    #   * slam_toolbox inherited that as a 0.5-1.6 s map->vision transform,
+    #     which controller_server (20 Hz, transform_tolerance 0.2) could not
+    #     use. One navigation attempt, then 78 aborts.
+    #   * the side and rear cameras see Spot's OWN LEGS, a phantom obstacle that
+    #     moves with the robot and can never be cleared. Containing that cost
+    #     BOTH Nav2 obstacle layers.
+    # The trade taken in exchange is coverage: one honest ~87 deg wedge where
+    # three irregular lobes used to be.
+    #
+    # `cameras_used` is OMITTED rather than set to []. An empty YAML list cannot
+    # be expressed as a ROS 2 launch parameter -- launch_ros cannot infer an
+    # element type and the launch dies before any node starts, with
+    #     TypeError: Expected 'value' to be one of [float, int, str, bool,
+    #     bytes], but got '()' of type '<class 'tuple'>'
+    # and ONLY when Spot is powered on (with the robot off the launch blocks
+    # earlier in authenticate()'s retry loop). The switch that actually disables
+    # them is launch_image_publishers: "False" in
+    # launch/includes/spot_driver.include.py.
+    #
+    # NOTE the coupling that goes with them: the image publisher node is also
+    # what broadcast the body cameras' static TF. Nothing needs those frames any
+    # more, but anything that did would break silently.
+    publish_rgb: False
+    publish_depth: False
+    publish_depth_registered: False
+
+    initialize_spot_cam: False
+    use_velodyne: False
