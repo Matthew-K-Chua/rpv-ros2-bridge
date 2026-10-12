@@ -1,22 +1,5 @@
-"""The depth cameras this stack can run, and the stream profiles each offers.
+# The depth cameras this stack can run, and the stream profiles each offers.
 
-One place owns what a camera model can physically do, because two different
-files used to guess at it:
-
-  * the old Pi launch file (deleted 2026-09-16) hard-coded the D435's colour
-    frame rates, so a
-    D455 request for 5 fps would have been rejected and a D455 request for 6 fps
-    accepted -- librealsense would then fail to resolve it at start-up, which is
-    the exact failure that validation exists to prevent.
-  * the flattener's `range_min`/`range_max`, slam_toolbox's laser range and
-    Nav2's raytrace/obstacle ranges are one decision written in four files. They
-    are read from here now, and `RANGE_PARTNERS` below records the
-    static yaml still agrees.
-
-Provenance is marked per value. MEASURED means this rig, on the date given;
-DATASHEET means Intel's published figure and has not been checked against this
-unit; JUDGEMENT means someone chose it and said why.
-"""
 from __future__ import annotations
 
 import re

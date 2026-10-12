@@ -50,26 +50,6 @@ the policy over HTTP. The policy's selected frontier is returned to Nav2 as the
 next navigation goal, and the resulting velocity commands are relayed back to
 the robot through the on-board module.
 
-### Why the scan chain runs on the module
-
-The link between the module and the host carries approximately 50 Mbit/s. The
-raw depth raster alone is approximately 98 Mbit/s at 848x480x15, so projecting
-the cloud and flattening it on the host is not feasible. We therefore run the
-point cloud and the flattener on the Pi such that only a 720-bin `/scan`
-crosses, and enforce this with the deny lists in `config/zenoh_*.json5`.
-
-### Why the camera provides two depth streams
-
-The D435 publishes a raw depth stream and a stream aligned to the colour frame,
-and the two are not interchangeable.
-
-| Stream | Consumer | Reason |
-|---|---|---|
-| `depth/image_rect_raw` | `/scan`, on the module | The depth sensor observes 87 degrees where colour observes 69; aligning depth to colour crops it to the colour frustum, and we cannot spare 18 degrees of the only wedge the robot has |
-| `aligned_depth_to_color/image_raw` | the policy | Registered to the colour frame by the camera, such that the raster is colour-sized by construction and each detection's pixels index the correct depth |
-
-We use `pointcloud_to_laserscan` to convert the depth from the camera into a format SLAM Toolbox can use.
-
 ### The episode
 
 On start the bridge waits for the RGB frame, the aligned depth, `/map`, and the
@@ -158,7 +138,7 @@ first. Two consequences of this transport look like faults but are not:
 
 - **Services do not cross the bridge.** Spot's `/claim`, `/power_on`, `/stand`,
   `/sit`, `/power_off`, and `/release` must be called from a module shell.
-- **`ROS_DISTRO` is load-bearing.** Left unset, the zenoh bridge assumes a newer
+- **`ROS_DISTRO` is required.** Left unset, the zenoh bridge assumes a newer
   distribution, cannot parse Humble's discovery messages, and every service call
   across it fails with `sequence size exceeds remaining buffer`, while topics
   continue to work. The topics working is what conceals the cause.
@@ -324,11 +304,6 @@ python3 -m ceai.rpv_bridge --ros-args \
   -p policy_url:=http://127.0.0.1:13000/rpv_policy
 ```
 
-Each `-p name:=value` fragment must be followed by a space when a command is
-assembled programmatically. Without one, the next fragment concatenates onto it
-and ROS parses the pair as a single malformed parameter, silently retaining the
-declared default.
-
 The bridge's log should report, in order:
 
 ```
@@ -365,9 +340,6 @@ Synonyms may be supplied `|`-separated, in which case all are prompted to SAM 3
 but only the first is matched against a returned mask's label. Changing the
 target requires restarting the bridge; the policy and perception servers remain
 up.
-
-Which vocabulary the perception stack is conditioned on depends on whether
-YOLOE runs, and the two paths are not interchangeable.
 
 | `SKIP_YOLOE` | Vocabulary | Behaviour |
 |---|---|---|
@@ -419,16 +391,9 @@ On Spot, `spot_name` and `frame_prefix` must both be `""`. Frames appearing as
 `Spot/body` indicate that `spot_name` has been set, and no TF lookup in the stack
 will resolve.
 
-The six mount numbers (`d435_x` through `d435_yaw`) are load-bearing for
+The six mount numbers (`d435_x` through `d435_yaw`) are required for
 navigation, as `/scan` is produced by transforming the camera's cloud into the
-base frame. A mount pitch that is short by a few degrees does not hold the floor
-flat in the base frame; it ramps the floor upward with distance, and where that
-ramp crosses the band's lower bound every bearing returns at the same range,
-which presents in RViz as a circular arc, or a wall, that is not there. A
-*missing* transform is worse: the flattener cannot reach the target frame, so
-`/scan` never appears at all, with no error anywhere. The launch therefore
-refuses to start the scan chain without either a profile mount or all six
-override arguments, and prints which it used and the file it came from.
+base frame.
 
 ### Bridge parameters
 
@@ -484,12 +449,6 @@ three respects from that configuration:
 | Perception stage 2 | `SKIP_YOLOE=1`, which does not start YOLOE and prompts SAM 3 directly with the 14 labels in `data/shortvis.yaml` | `SKIP_YOLOE=0` with `YOLOE_CLASSES=data/lvis.yaml`, which runs YOLOE over the 1203-class LVIS vocabulary and passes its proposals to SAM 3. Requires `checkpoints/yoloe-26x-seg.pt` |
 | Step budget | `max_steps: 500` | 250; pass `-p max_steps:=250` |
 | Stopping criterion | `stop_standoff_m: 1.0`, measured from the body centre | A success distance of 1.4 m from the target |
-
-The first of these is the one worth care. The policy launcher defaults
-`YOLOE_CLASSES` to `data/shortvis.yaml` rather than to the upstream
-`data/lvis.yaml`, so enabling YOLOE without also setting the vocabulary gives a
-detector conditioned on 14 labels used for initial testing to avoide false negatives from YOLO-E. 
-Setting both variables together is what reproduces the funnel.
 
 The settings that are already aligned, and that should not be altered when
 reproducing, are Mask2Former disabled (`SKIP_MASK2FORMER=1`), YOLOE at a

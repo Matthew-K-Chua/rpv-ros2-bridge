@@ -1,40 +1,6 @@
 """Pi-side listener: sit the robot when the bridge says the run is finished.
 
     bridge (the workstation)  --/ceai/finish "sit <run-id>"-->  (zenoh)  -->  THIS NODE  -->  /sit
-
-Why this exists: `/sit` is a service, and Spot's services have not reliably
-crossed zenoh-bridge-ros2dds on this rig (measured 2026-09-09,
-measured 2026-09-09; the bridge's direct call sat nothing on 2026-09-19).
-Topics do cross. So the bridge announces the finish on a topic and this node,
-running beside spot_driver where `/sit` is local, makes the call.
-
-The bridge repeats the announcement for a few seconds (zenoh republishes as
-VOLATILE, so a single message can be missed) and each carries a run id; a run
-is sat once, however many copies arrive. The bridge still tries `/sit` itself
-too; a second sit on a sitting robot is a no-op.
-
-    python3 -m ceai.finish_listener --ros-args -p namespace:=""
-    ros2 topic pub --once /ceai/finish std_msgs/msg/String "{data: 'sit manual-1'}"
-
-Started by launch/robot_onboard.launch.py whenever the robot has a driver wrapper.
-
-WHY ONE CALL IS NOT ENOUGH (2026-09-19, sometimes sat, sometimes not):
-`/sit` is NON-BLOCKING in spot_driver -- spot_wrapper.sit() sends the command
-and returns success as soon as Spot ACCEPTS it, before a leg has moved. If a
-cmd_vel arrives after that (Nav2's controller getting one more cycle in before
-the cancel lands, the velocity smoother draining), the velocity command
-supersedes the sit and the robot stays up. No error anywhere: the service said
-"Success". The wrapper's AsyncIdle then sees the sit "not being processed
-anymore" and drops it, so `sitting` on `status/feedback` stays False.
-
-So, with `sit_retry_s` > 0, this node treats the announcement as "get the
-robot sitting", not "call /sit once": it calls /sit, then every sit_retry_s
-seconds reads the driver's `status/feedback` and, until `sitting` is True,
-calls /sit again -- for at most sit_confirm_timeout_s seconds, then gives up
-with a warning. `sitting` is set by the wrapper only from Spot's own feedback
-that the sit COMPLETED (spot_wrapper AsyncIdle), so it is the right thing to
-wait on. Off (`sit_retry_s:=0`) this is exactly the single call it was.
-robot_onboard.launch.py passes 1.0.
 """
 import time
 
